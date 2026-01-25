@@ -79,3 +79,15 @@ class CandleStore:
             return False
 
         return (utcnow() - last) <= timedelta(seconds=max_age_seconds)
+
+    def replace_history(self, symbol: str, timeframe: str, candles: List[Candle]) -> None:
+        """
+        Replace stored closed candles for a timeframe in one shot.
+        Used for REST refresh of higher timeframes.
+        """
+        key = (symbol, timeframe)
+        self.history[key] = candles[-self.max_history:]
+        # Remove any current forming candle for that TF (REST data is closed bars)
+        self.current.pop(key, None)
+        self.touch(symbol, timeframe)
+    
