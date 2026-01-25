@@ -77,6 +77,7 @@ class CandleBuilder:
         # Still inside current 1m window -> update.
         if tick.ts < current.end_ts:
             current.update(price=tick.price, size=tick.size)
+            self.store.touch(symbol, timeframe)
             return None
 
         # Minute rolled -> close old 1m and start new 1m.
@@ -138,5 +139,6 @@ class CandleBuilder:
         current_5m.l = min(current_5m.l, closed_1m.l)
         current_5m.c = closed_1m.c
         current_5m.v += closed_1m.v
+        self.store.touch(symbol, timeframe)
 
         return None
