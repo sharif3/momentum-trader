@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import List, Tuple, Optional
+import time
+from typing import List, Optional, Tuple
 
 from app.indicators.engine import compute_ema_for_timeframe
 from app.models.market import Candle
@@ -8,27 +9,40 @@ from app.models.market_context import MarketContext
 from app.providers.loader import get_provider
 from app.state import store
 
+# Simple in-memory cache to reduce REST calls.
+# Key: (symbol, n_bars) -> (cached_at_epoch_seconds, pct_return)
+_RET_CACHE: dict[tuple[str, int], tuple[float, float]] = {}
+_RET_CACHE_TTL_SECONDS = 60
 
-def _pct_return_last_n_5m(symbol: str, n: int = 6) -> Optional[float]:
-    """
-    Percent return over last n 5m candles using REST fallback.
-    return = (close_now / close_n_bars_ago) - 1
 
-    We use REST because 5m from WS isn't integrated yet.
-    """
+def _pct_return_last_n_5m(symbol: str, n: int = 6) -> float | None:
+    # 1) Cache check
+    key = (symbol, n)
+    now = time.time()
+    cached = _RET_CACHE.get(key)
+    if cached:
+        cached_at, cached_val = cached
+        if (now - cached_at) <= _RET_CACHE_TTL_SECONDS:
+            return cached_val
+
+    # 2) REST fetch (fallback until WS 5m exists)
     provider = get_provider()
 
+    # Need n+1 closes to compute return over n bars
     rows = provider.fetch_candles(symbol, "5m", limit=max(50, n + 10))
     if not rows or len(rows) < (n + 1):
         return None
 
     close_now = float(rows[-1]["close"])
     close_then = float(rows[-(n + 1)]["close"])
-
     if close_then == 0:
         return None
 
-    return (close_now / close_then) - 1.0
+    ret = (close_now / close_then) - 1.0
+
+    # 3) Store cache
+    _RET_CACHE[key] = (now, float(ret))
+    return float(ret)
 
 
 def _min_low(candles: List[Candle]) -> float:
@@ -108,18 +122,4 @@ def compute_market_context(primary_symbol: str) -> MarketContext:
             audit.append("SPY.US: missing 15m data")
         if not qqq_has:
             audit.append("QQQ.US: missing 15m data")
-        return MarketContext(regime="UNKNOWN", risk_off=False, rs_30m=rs_30m, audit=audit)
-
-    spy_flag, spy_audit = _risk_flag(spy)
-    qqq_flag, qqq_audit = _risk_flag(qqq)
-
-    audit.extend(spy_audit)
-    audit.extend(qqq_audit)
-
-    if spy_flag and qqq_flag:
-        return MarketContext(regime="RISK_OFF", risk_off=True, rs_30m=rs_30m, audit=audit)
-
-    if spy_flag or qqq_flag:
-        return MarketContext(regime="NEUTRAL", risk_off=False, rs_30m=rs_30m, audit=audit)
-
-    return MarketContext(regime="RISK_ON", risk_off=False, rs_30m=rs_30m, audit=audit)
+        return MarketCo
