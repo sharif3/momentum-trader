@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import traceback
 from datetime import timedelta
 
 import httpx
@@ -72,6 +74,7 @@ async def rest_refresh_loop(symbol: str) -> None:
     periodically refresh 15m/1h/1d (and 4h via fallback) into the in-memory store.
     """
     provider = get_provider()
+    log = logging.getLogger("rest_refresher")
 
     while True:
         try:
@@ -79,6 +82,13 @@ async def rest_refresh_loop(symbol: str) -> None:
             candles_15m = provider.fetch_candles(symbol, "15m", 300)
             candles_1h = provider.fetch_candles(symbol, "1h", 300)
             candles_1d = provider.fetch_candles(symbol, "1d", 300)
+            log.info(
+                "Fetched counts symbol=%s 15m=%d 1h=%d 1d=%d",
+                symbol,
+                len(candles_15m),
+                len(candles_1h),
+                len(candles_1d),
+            )
 
             # Convert to Candle objects
             def to_candle(tf: str, row: dict, duration: timedelta) -> Candle:
@@ -106,14 +116,17 @@ async def rest_refresh_loop(symbol: str) -> None:
             except httpx.HTTPStatusError:
                 c4h = _aggregate_1h_to_4h(symbol, c1h, 300)
 
+            log.info("Fetched counts symbol=%s 4h=%d", symbol, len(c4h))
+
             store.replace_history(symbol, "15m", c15m)
             store.replace_history(symbol, "1h", c1h)
             store.replace_history(symbol, "4h", c4h)
             store.replace_history(symbol, "1d", c1d)
 
-        except Exception:
-            # Keep loop alive even if provider temporarily fails.
-            pass
+        except Exception as e:
+            # Keep loop alive even if provider temporarily fails, but log the error.
+            log.error("REST refresh failed for symbol=%s error=%s", symbol, repr(e))
+            log.error(traceback.format_exc())
 
         # Refresh cadence: every 60s for now (simple).
         await asyncio.sleep(60)

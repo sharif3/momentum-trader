@@ -19,7 +19,18 @@ app.include_router(api_router)
 @app.on_event("startup")
 async def _startup():
     # REST refresher (higher timeframes)
-    asyncio.create_task(rest_refresh_loop(settings.default_ticker.upper()))
+        # REST refresher (higher timeframes)
+    # We refresh:
+    # - the primary ticker (default_ticker)
+    # - tape context tickers (SPY + QQQ) for market regime + relative strength
+    symbols = [
+        settings.default_ticker.upper(),
+        "SPY.US",
+        "QQQ.US",
+    ]
+
+    for sym in symbols:
+        asyncio.create_task(rest_refresh_loop(sym))
 
     # WS ingest (builds 1m/5m candles from ticks)
     asyncio.create_task(

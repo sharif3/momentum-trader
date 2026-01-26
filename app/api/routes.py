@@ -6,6 +6,7 @@ from typing import Dict
 from fastapi import APIRouter, Query
 
 from app.state import store
+from app.market_context.engine import compute_market_context
 from app.indicators.engine import (
     compute_ema_for_timeframe,
     compute_atr_for_timeframe,
@@ -81,8 +82,12 @@ def snapshot(
         "15m": compute_relvol_for_timeframe(store, symbol, "15m", window=20),
     }
 
+    market_context = compute_market_context(symbol)
+
+
     return {
         "ticker": symbol,
+        "market_context": market_context.model_dump(),
         "timeframes": timeframes,
         "missing_timeframes": missing,
         "indicators": {
@@ -101,6 +106,8 @@ def score(
     ticker: str = Query(..., description="Symbol, e.g. TSLA.US"),
 ):
     symbol = ticker.upper().strip()
+    market_context = compute_market_context(symbol)
+
 
     timeframes = {tf: _tf_status(symbol, tf) for tf in TF_MAX_AGE_SECONDS.keys()}
     missing = [tf for tf, info in timeframes.items() if not info["has_data"]]
@@ -131,7 +138,12 @@ def score(
             "suggested_size": 0.0,
             "missing_timeframes": missing,
             "timeframes": timeframes,
-            "tape": {"risk_off": None, "rs_30m": None},
+            "tape": {
+                "regime": market_context.regime,
+                "risk_off": market_context.risk_off,
+                "rs_30m": market_context.rs_30m,
+                "audit": market_context.audit,
+            },
             "levels": {"entry": None, "stop": None, "targets": []},
             "indicators": {
                 "ema": {"5m": ema_5m, "15m": ema_15m, "1h": ema_1h, "1d": ema_1d},

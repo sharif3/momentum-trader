@@ -1,164 +1,228 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
+import os
 from datetime import datetime, timezone
-from typing import AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator
 
 import httpx
-import websockets
 
-from app.config import get_settings
-from app.providers.base import MarketDataProvider
+log = logging.getLogger("eodhd_provider")
 
 
-class EodhdProvider(MarketDataProvider):
+class EodhdProvider:
     """
-    EODHD provider.
+    EODHD Provider (REST + WS stub for now).
 
-    Milestone 4 (REST):
-    - intraday candles: 1m / 5m / 15m / 1h / 4h via /api/intraday/{symbol}
-    - daily candles: 1d via /api/eod/{symbol}
+    Why this file exists:
+    - Your app currently runs BOTH:
+        - REST refresh loop (higher timeframes)
+        - WS ingest loop (ticks)
+      Even if WS isn't implemented yet, we must NOT crash at startup.
+
+    What this provider guarantees:
+    - REST candle fetch works against the correct EODHD base URL (.../api).
+    - Bad/partial rows (None fields) are skipped (no float(None) crashes).
+    - stream_ticks() exists (stub) so ws_ingest_loop doesn't error.
     """
 
     def __init__(self) -> None:
-        settings = get_settings()
-        self.api_token = settings.eodhd_api_token.strip()
-        self.base_url = settings.eodhd_base_url.strip() or "https://eodhd.com"
-        self.ws_url = settings.eodhd_ws_url.strip()
-
-    async def stream_ticks(self, symbols: List[str]) -> AsyncIterator[Dict]:
-        """
-        Connects to EODHD WebSocket and yields raw tick dicts.
-
-        Yields only messages that look like trade ticks:
-          - s: symbol
-          - p: price
-          - t: epoch milliseconds
-          - v: size (optional)
-        """
+        # Accept either env var name
+        self.api_token = os.getenv("EODHD_API_TOKEN") or os.getenv("EODHD_API_KEY")
         if not self.api_token:
-            raise ValueError("Missing EODHD_API_TOKEN in .env")
+            raise RuntimeError("Missing EODHD API token. Set EODHD_API_TOKEN in your .env.")
 
-        url = f"{self.ws_url}?api_token={self.api_token}"
-        sub_msg = {"action": "subscribe", "symbols": ",".join(symbols)}
+        # IMPORTANT: EODHD REST endpoints live under https://eodhd.com/api
+        raw_base = (os.getenv("EODHD_BASE_URL") or "https://eodhd.com/api").rstrip("/")
 
-        backoff = 1
+        # If user set EODHD_BASE_URL=https://eodhd.com, force /api
+        if raw_base == "https://eodhd.com":
+            raw_base = "https://eodhd.com/api"
+        if raw_base.endswith("eodhd.com") and not raw_base.endswith("/api"):
+            raw_base = raw_base + "/api"
+
+        self.base_url = raw_base
+
+        timeout_s = float(os.getenv("EODHD_TIMEOUT_SECONDS", "20"))
+        self._client = httpx.Client(timeout=timeout_s)
+
+    # -------------------------
+    # Public interface used by the app
+    # -------------------------
+    def fetch_candles(self, symbol: str, timeframe: str, limit: int = 300) -> list[dict]:
+        """
+        Returns candles as list[dict]:
+          {"ts": datetime, "open": float, "high": float, "low": float, "close": float, "volume": float}
+
+        timeframe in this repo: "15m", "1h", "4h", "1d" (and later "1m", "5m").
+        """
+        tf = (timeframe or "").lower().strip()
+
+        if tf in ("1d", "d", "day", "daily"):
+            return self._fetch_daily(symbol, limit=limit)
+
+        return self._fetch_intraday(symbol, interval=tf, limit=limit)
+
+    async def stream_ticks(self, symbols: list[str]) -> AsyncIterator[dict]:
+        """
+        WS tick stream (stub).
+
+        Your app starts ws_ingest_loop() at startup and expects this method.
+        We keep it alive (no crash), but we DON'T emit ticks yet.
+        We'll implement real WS later when we do the WS milestone.
+        """
+        log.warning("EODHD stream_ticks() stub active. WS ticks not implemented yet. symbols=%s", symbols)
         while True:
-            try:
-                async with websockets.connect(
-                    url, ping_interval=20, ping_timeout=20
-                ) as ws:
-                    await ws.send(json.dumps(sub_msg))
+            await asyncio.sleep(3600)
+            if False:  # keeps this an async generator
+                yield {}
 
-                    async for raw in ws:
-                        data = json.loads(raw)
-
-                        # Ignore non-tick messages (authorized, heartbeats, etc.)
-                        if not all(k in data for k in ("s", "p", "t")):
-                            continue
-
-                        # Normalize into a consistent dict shape for the rest of the app
-                        yield {
-                            "symbol": str(data["s"]),
-                            "price": float(data["p"]),
-                            "size": float(data.get("v") or 0.0),
-                            "t_ms": float(data["t"]),
-                        }
-
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 15)
-
-    def fetch_candles(
-        self,
-        symbol: str,
-        timeframe: str,
-        limit: int,
-        start: Optional[str] = None,
-        end: Optional[str] = None,
-    ) -> List[Dict]:
-        if not self.api_token:
-            raise ValueError("Missing EODHD_API_TOKEN in .env")
-
-        tf = timeframe.lower().strip()
-
-        if tf in {"1m", "5m", "15m", "1h", "4h"}:
-            return self._fetch_intraday(symbol=symbol, interval=tf, limit=limit)
-
-        if tf == "1d":
-            return self._fetch_eod_daily(symbol=symbol, limit=limit)
-
-        raise ValueError(f"Unsupported timeframe for EODHD REST: {timeframe}")
-
-    def _fetch_intraday(self, symbol: str, interval: str, limit: int) -> List[Dict]:
-        url = f"{self.base_url}/api/intraday/{symbol}"
-        params: Dict[str, str] = {
+    # -------------------------
+    # REST: intraday
+    # -------------------------
+    def _fetch_intraday(self, symbol: str, interval: str, limit: int) -> list[dict]:
+        """
+        EODHD intraday endpoint:
+          GET {base_url}/intraday/{symbol}?api_token=...&interval=15m&fmt=json
+        """
+        url = f"{self.base_url}/intraday/{symbol}"
+        params = {
             "api_token": self.api_token,
             "fmt": "json",
             "interval": interval,
         }
+        if limit:
+            params["limit"] = str(limit)
 
-        with httpx.Client(timeout=20) as client:
-            resp = client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = self._client.get(url, params=params)
+        resp.raise_for_status()
 
-        out: List[Dict] = []
-        for row in data[-limit:]:
-            raw_dt = row["datetime"]
+        data = resp.json()
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
+        if not isinstance(data, list):
+            log.warning("Unexpected intraday payload type symbol=%s interval=%s type=%s", symbol, interval, type(data))
+            return []
 
-            # EODHD sometimes returns unix seconds, sometimes a "YYYY-MM-DD HH:MM:SS" string.
-            if isinstance(raw_dt, (int, float)) or (
-                isinstance(raw_dt, str) and raw_dt.isdigit()
-            ):
-                ts = datetime.fromtimestamp(int(raw_dt), tz=timezone.utc)
-            else:
-                # Example: "2025-12-16 19:30:00"
-                ts = datetime.strptime(raw_dt, "%Y-%m-%d %H:%M:%S").replace(
-                    tzinfo=timezone.utc
+        out: list[dict] = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+
+            # Field names can vary; handle common variants
+            ts_raw = row.get("datetime") or row.get("timestamp") or row.get("date")
+            o = row.get("open")
+            h = row.get("high")
+            l = row.get("low")
+            c = row.get("close")
+            v = row.get("volume")
+
+            # Skip partial/invalid rows (prevents float(None) crashes)
+            if ts_raw is None or o is None or h is None or l is None or c is None or v is None:
+                continue
+
+            try:
+                out.append(
+                    {
+                        "ts": self._parse_ts(ts_raw),
+                        "open": float(o),
+                        "high": float(h),
+                        "low": float(l),
+                        "close": float(c),
+                        "volume": float(v),
+                    }
                 )
+            except Exception:
+                continue
 
-            out.append(
-                {
-                    "ts": ts,
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": float(row.get("volume", 0) or 0),
-                }
-            )
-
+        out.sort(key=lambda x: x["ts"])
+        if limit and len(out) > limit:
+            out = out[-limit:]
         return out
 
-    def _fetch_eod_daily(self, symbol: str, limit: int) -> List[Dict]:
-        url = f"{self.base_url}/api/eod/{symbol}"
-        params: Dict[str, str] = {
-            "api_token": self.api_token,
-            "fmt": "json",
-            "period": "d",
-        }
+    # -------------------------
+    # REST: daily
+    # -------------------------
+    def _fetch_daily(self, symbol: str, limit: int) -> list[dict]:
+        """
+        EODHD daily endpoint:
+          GET {base_url}/eod/{symbol}?api_token=...&fmt=json
+        """
+        url = f"{self.base_url}/eod/{symbol}"
+        params = {"api_token": self.api_token, "fmt": "json"}
 
-        with httpx.Client(timeout=20) as client:
-            resp = client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+        resp = self._client.get(url, params=params)
+        resp.raise_for_status()
 
-        out: List[Dict] = []
-        for row in data[-limit:]:
-            dt = datetime.fromisoformat(row["date"]).replace(tzinfo=timezone.utc)
-            out.append(
-                {
-                    "ts": dt,
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": float(row.get("volume", 0) or 0),
-                }
-            )
+        data = resp.json()
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
+        if not isinstance(data, list):
+            log.warning("Unexpected daily payload type symbol=%s type=%s", symbol, type(data))
+            return []
 
+        out: list[dict] = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+
+            ts_raw = row.get("date") or row.get("datetime") or row.get("timestamp")
+            o = row.get("open")
+            h = row.get("high")
+            l = row.get("low")
+            c = row.get("close")
+            v = row.get("volume")
+
+            if ts_raw is None or o is None or h is None or l is None or c is None or v is None:
+                continue
+
+            try:
+                out.append(
+                    {
+                        "ts": self._parse_ts(ts_raw),
+                        "open": float(o),
+                        "high": float(h),
+                        "low": float(l),
+                        "close": float(c),
+                        "volume": float(v),
+                    }
+                )
+            except Exception:
+                continue
+
+        out.sort(key=lambda x: x["ts"])
+        if limit and len(out) > limit:
+            out = out[-limit:]
         return out
+
+    # -------------------------
+    # Timestamp parsing
+    # -------------------------
+    def _parse_ts(self, ts_raw: Any) -> datetime:
+        """
+        Converts timestamp to datetime (UTC).
+        Handles:
+          - epoch seconds/millis
+          - "YYYY-MM-DD"
+          - "YYYY-MM-DD HH:MM:SS"
+          - ISO strings
+        """
+        if isinstance(ts_raw, (int, float)):
+            if ts_raw > 1_000_000_000_000:  # millis
+                return datetime.fromtimestamp(ts_raw / 1000.0, tz=timezone.utc)
+            return datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+
+        s = str(ts_raw).strip()
+        s = s.replace(" ", "T")
+
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def close(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
