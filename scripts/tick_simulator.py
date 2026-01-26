@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import os
+import sys
+
+# Add repo root to Python import path so `import app...` works
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 import random
 from datetime import datetime, timedelta, timezone
 
 from app.candles.builder import CandleBuilder
 from app.candles.store import CandleStore
 from app.models.market import Tick
-
 
 def run(symbol: str = "TSLA", seconds: int = 360) -> None:
     """

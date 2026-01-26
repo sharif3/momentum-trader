@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import AsyncIterator, Dict, List, Optional
 
 import httpx
+import websockets
 
 from app.config import get_settings
 from app.providers.base import MarketDataProvider
@@ -14,7 +17,7 @@ class EodhdProvider(MarketDataProvider):
     EODHD provider.
 
     Milestone 4 (REST):
-    - intraday candles: 1m / 5m / 1h via /api/intraday/{symbol}
+    - intraday candles: 1m / 5m / 15m / 1h / 4h via /api/intraday/{symbol}
     - daily candles: 1d via /api/eod/{symbol}
     """
 
@@ -22,9 +25,52 @@ class EodhdProvider(MarketDataProvider):
         settings = get_settings()
         self.api_token = settings.eodhd_api_token.strip()
         self.base_url = settings.eodhd_base_url.strip() or "https://eodhd.com"
+        self.ws_url = settings.eodhd_ws_url.strip()
 
     async def stream_ticks(self, symbols: List[str]) -> AsyncIterator[Dict]:
-        raise NotImplementedError("EODHD WebSocket streaming not implemented yet")
+        """
+        Connects to EODHD WebSocket and yields raw tick dicts.
+
+        Yields only messages that look like trade ticks:
+          - s: symbol
+          - p: price
+          - t: epoch milliseconds
+          - v: size (optional)
+        """
+        if not self.api_token:
+            raise ValueError("Missing EODHD_API_TOKEN in .env")
+
+        url = f"{self.ws_url}?api_token={self.api_token}"
+        sub_msg = {"action": "subscribe", "symbols": ",".join(symbols)}
+
+        backoff = 1
+        while True:
+            try:
+                async with websockets.connect(
+                    url, ping_interval=20, ping_timeout=20
+                ) as ws:
+                    await ws.send(json.dumps(sub_msg))
+
+                    async for raw in ws:
+                        data = json.loads(raw)
+
+                        # Ignore non-tick messages (authorized, heartbeats, etc.)
+                        if not all(k in data for k in ("s", "p", "t")):
+                            continue
+
+                        # Normalize into a consistent dict shape for the rest of the app
+                        yield {
+                            "symbol": str(data["s"]),
+                            "price": float(data["p"]),
+                            "size": float(data.get("v") or 0.0),
+                            "t_ms": float(data["t"]),
+                        }
+
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 15)
 
     def fetch_candles(
         self,
