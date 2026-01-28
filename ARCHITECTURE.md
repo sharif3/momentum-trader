@@ -78,6 +78,29 @@ We’ll run two loops (v1, single process):
 
 FastAPI serves requests at any time by reading from the in-memory store.
 
+## 4.1) WebSocket tick schema (EODHD US trades)
+
+Endpoint (US trades):
+- wss://ws.eodhistoricaldata.com/ws/us?api_token=YOUR_API_KEY
+
+Subscribe message:
+- {"action": "subscribe", "symbols": "AAPL,TSLA"}
+
+Trade message fields:
+- s: ticker symbol (e.g., AAPL)
+- p: last trade price
+- v: trade size (shares)
+- c: trade condition code (numeric)
+- dp: dark pool flag (true/false)
+- ms: market status (open | closed | extended hours)
+- t: epoch milliseconds (trade time)
+
+Mapping to Tick:
+- symbol <- s
+- price <- p
+- size <- v
+- ts <- t (epoch ms)
+
 ## 5) Data freshness rules (important)
 - If 5m or 15m are stale/missing -> HOLD and report missing TFs
 - 1m/5m are considered “live” when fed by WS

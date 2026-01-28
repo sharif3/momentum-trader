@@ -1,30 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 import httpx
+import websockets
 
 log = logging.getLogger("eodhd_provider")
 
 
 class EodhdProvider:
     """
-    EODHD Provider (REST + WS stub for now).
+    EODHD Provider (REST + WS).
 
-    Why this file exists:
-    - Your app currently runs BOTH:
-        - REST refresh loop (higher timeframes)
-        - WS ingest loop (ticks)
-      Even if WS isn't implemented yet, we must NOT crash at startup.
+    REST:
+    - fetch candles for 15m/1h/4h/1d (and intraday)
 
-    What this provider guarantees:
-    - REST candle fetch works against the correct EODHD base URL (.../api).
-    - Bad/partial rows (None fields) are skipped (no float(None) crashes).
-    - stream_ticks() exists (stub) so ws_ingest_loop doesn't error.
+    WS:
+    - live trade ticks for 1m/5m candle building
     """
 
     def __init__(self) -> None:
@@ -47,6 +44,27 @@ class EodhdProvider:
         timeout_s = float(os.getenv("EODHD_TIMEOUT_SECONDS", "20"))
         self._client = httpx.Client(timeout=timeout_s)
 
+    def _build_ws_url(self) -> str:
+        raw = (os.getenv("EODHD_WS_URL") or "wss://ws.eodhistoricaldata.com/ws/us").strip()
+        if "api_token=" in raw:
+            return raw
+        sep = "&" if "?" in raw else "?"
+        return f"{raw}{sep}api_token={self.api_token}"
+
+    def _build_ws_symbol_map(self, symbols: list[str]) -> tuple[list[str], dict[str, str]]:
+        wire_symbols: list[str] = []
+        symbol_map: dict[str, str] = {}
+
+        for s in symbols:
+            s = s.strip().upper()
+            if not s:
+                continue
+            wire = s[:-3] if s.endswith(".US") else s
+            wire_symbols.append(wire)
+            symbol_map[wire] = s
+
+        return wire_symbols, symbol_map
+
     # -------------------------
     # Public interface used by the app
     # -------------------------
@@ -66,17 +84,85 @@ class EodhdProvider:
 
     async def stream_ticks(self, symbols: list[str]) -> AsyncIterator[dict]:
         """
-        WS tick stream (stub).
+        WS tick stream (real).
 
-        Your app starts ws_ingest_loop() at startup and expects this method.
-        We keep it alive (no crash), but we DON'T emit ticks yet.
-        We'll implement real WS later when we do the WS milestone.
+        Connects to EODHD WS, subscribes to symbols, and yields ticks:
+          {"symbol": "...", "price": ..., "size": ..., "t_ms": ...}
         """
-        log.warning("EODHD stream_ticks() stub active. WS ticks not implemented yet. symbols=%s", symbols)
+        wire_symbols, symbol_map = self._build_ws_symbol_map(symbols)
+
+        if not wire_symbols:
+            log.warning("EODHD WS: no symbols provided")
+            while True:
+                await asyncio.sleep(3600)
+                if False:
+                    yield {}
+
+        ws_url = self._build_ws_url()
+        backoff = 1.0
+
         while True:
-            await asyncio.sleep(3600)
-            if False:  # keeps this an async generator
-                yield {}
+            try:
+                async with websockets.connect(ws_url, ping_interval=20, ping_timeout=20) as ws:
+                    # Wait for auth message first (EODHD sends {"status_code":200,...})
+                    try:
+                        first = await asyncio.wait_for(ws.recv(), timeout=5)
+                        try:
+                            auth = json.loads(first)
+                            if isinstance(auth, dict) and auth.get("status_code") == 200:
+                                log.warning("EODHD WS authorized")
+                            else:
+                                log.warning("EODHD WS first msg=%s", auth)
+                        except Exception:
+                            log.warning("EODHD WS first msg (raw)=%s", first)
+                    except asyncio.TimeoutError:
+                        log.warning("EODHD WS auth message timeout (continuing)")
+
+                    sub = {"action": "subscribe", "symbols": ",".join(wire_symbols)}
+                    await ws.send(json.dumps(sub))
+
+                    log.warning("EODHD WS subscribed symbols=%s", wire_symbols)
+                    backoff = 1.0
+                    first_tick_logged = False
+                    async for raw in ws:
+                        try:
+                            data = json.loads(raw)
+                        except Exception:
+                            continue
+
+                        if not isinstance(data, dict):
+                            continue
+
+                        s = data.get("s")
+                        p = data.get("p")
+                        v = data.get("v")
+                        t = data.get("t")
+
+                        if s is None or p is None or v is None or t is None:
+                            continue
+
+                        s_up = str(s).upper()
+                        symbol = symbol_map.get(s_up, s_up)
+                        if ".US" not in symbol and "." not in symbol:
+                            symbol = f"{symbol}.US"
+
+                        yield {
+                            "symbol": symbol,
+                            "price": float(p),
+                            "size": float(v),
+                            "t_ms": int(t),
+                        }
+                        if not first_tick_logged:
+                            log.warning(
+                                "EODHD WS first tick symbol=%s price=%s size=%s t_ms=%s",
+                                symbol, p, v, t
+                            )
+                            first_tick_logged = True
+
+            except Exception as e:
+                log.warning("EODHD WS error: %s", e)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
 
     # -------------------------
     # REST: intraday
@@ -102,7 +188,12 @@ class EodhdProvider:
         if isinstance(data, dict) and "data" in data:
             data = data["data"]
         if not isinstance(data, list):
-            log.warning("Unexpected intraday payload type symbol=%s interval=%s type=%s", symbol, interval, type(data))
+            log.warning(
+                "Unexpected intraday payload type symbol=%s interval=%s type=%s",
+                symbol,
+                interval,
+                type(data),
+            )
             return []
 
         out: list[dict] = []

@@ -36,18 +36,26 @@
 - Implement Market RiskOff
 - Implement RS_30m vs QQQ
 
-## Milestone 7: Scoring engine
+## Milestone 7: Scoring engine ✅
 - Implement momentum state machine
 - Implement hard gates
 - Implement decision mapping (BUY/HOLD/EXIT/IGNORE)
 - Return audit trail (why gates failed/passed)
 
-## Milestone 8: API endpoints
+## Milestone 8: API endpoints ✅
 - GET /score?ticker=
 - GET /snapshot?ticker=
 - Include freshness + missing TFs + audit in response
 
-## Milestone 9: GPT Actions
+## Milestone 9: WebSocket ticks (real-time intraday) ✅
+- Implement real provider WS stream_ticks (connect/auth/subscribe)
+- Parse trade messages into {symbol, price, size, t_ms}
+- Feed ticks into CandleBuilder to populate 1m/5m
+- Add SPY/QQQ to WS symbols config (or document WS_SYMBOLS usage)
+- Add reconnect/backoff + logging
+- Add smoke test instructions for live ticks
+
+## Milestone 10: GPT Actions
 - Define OpenAPI schema for endpoints
 - Wire GPT Action calls to /score and /snapshot
 
