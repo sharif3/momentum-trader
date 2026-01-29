@@ -39,6 +39,11 @@ def _tf_status(symbol: str, tf: str) -> Dict:
         "fresh": store.is_fresh(symbol, tf, max_age_seconds=max_age),
         "max_age_seconds": max_age,
     }
+def _normalize_symbol(raw: str) -> str:
+    sym = raw.upper().strip()
+    if "." not in sym:
+        sym = f"{sym}.US"
+    return sym
 
 
 def _safe_market_context(symbol: str) -> MarketContext:
@@ -58,7 +63,8 @@ def snapshot(
     ticker: str = Query(..., description="Symbol, e.g. TSLA.US"),
     limit: int = Query(50, ge=10, le=500, description="(Reserved) Max candles to return later"),
 ):
-    symbol = ticker.upper().strip()
+    symbol = _normalize_symbol(ticker)
+
 
     timeframes = {tf: _tf_status(symbol, tf) for tf in TF_MAX_AGE_SECONDS.keys()}
     missing = [tf for tf, info in timeframes.items() if not info["has_data"]]
@@ -118,7 +124,7 @@ def snapshot(
 def score(
     ticker: str = Query(..., description="Symbol, e.g. TSLA.US"),
 ):
-    symbol = ticker.upper().strip()
+    symbol = _normalize_symbol(ticker)
     market_context = _safe_market_context(symbol)
 
     timeframes = {tf: _tf_status(symbol, tf) for tf in TF_MAX_AGE_SECONDS.keys()}

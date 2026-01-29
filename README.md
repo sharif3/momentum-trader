@@ -16,3 +16,19 @@ Provider (WS/REST) -> Candle Builder -> Candle Store -> Indicators -> Tape Conte
 ## Quick start
 1) Create a `.env` file (see Configuration below).
 2) Create and activate a virtualenv, then install deps:
+
+## Endpoints
+
+## OpenAPI (for GPT Actions)
+The OpenAPI schema is in:
+- `openapi.yaml`
+
+Use this file when creating a GPT Action.
+
+## GPT Actions (local dev via ngrok)
+GPT Actions run on OpenAI servers, so they cannot reach localhost directly.
+Use ngrok to create a public HTTPS URL.
+
+Workflow:
+1) Start your API:
+

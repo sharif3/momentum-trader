@@ -55,7 +55,7 @@
 - Add reconnect/backoff + logging
 - Add smoke test instructions for live ticks
 
-## Milestone 10: GPT Actions
+## Milestone 10: GPT Actions ✅
 - Define OpenAPI schema for endpoints
 - Wire GPT Action calls to /score and /snapshot
 

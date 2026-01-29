@@ -1,0 +1,177 @@
+openapi: 3.1.0
+info:
+  title: Momentum Trader API
+  version: 0.1.0
+servers:
+  - url: https://snippy-von-nonshredding.ngrok-free.dev
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /snapshot:
+    get:
+      operationId: getSnapshot
+      summary: Latest candles + indicators + market context
+      parameters:
+        - name: ticker
+          in: query
+          required: true
+          schema:
+            type: string
+            example: TSLA.US
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 10
+            maximum: 500
+            default: 50
+      responses:
+        "200":
+          description: Snapshot response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotResponse"
+
+  /score:
+    get:
+      operationId: getScore
+      summary: Signal/state/confidence + tape context + audit
+      parameters:
+        - name: ticker
+          in: query
+          required: true
+          schema:
+            type: string
+            example: TSLA.US
+      responses:
+        "200":
+          description: Score response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScoreResponse"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        app_env:
+          type: string
+          example: local
+        provider_config:
+          type: string
+          example: EODHD
+        provider_loaded:
+          type: string
+          example: EODHDProvider
+      required: [status]
+
+    TimeframeStatus:
+      type: object
+      properties:
+        has_data:
+          type: boolean
+        last_updated:
+          type: string
+          nullable: true
+          example: "2026-01-28T18:38:58.134442+00:00"
+        fresh:
+          type: boolean
+        max_age_seconds:
+          type: integer
+
+    MarketContext:
+      type: object
+      properties:
+        regime:
+          type: string
+          example: UNKNOWN
+        risk_off:
+          type: boolean
+        rs_30m:
+          type: number
+          nullable: true
+        audit:
+          type: array
+          items:
+            type: string
+
+    ScoreLevels:
+      type: object
+      properties:
+        entry_range:
+          nullable: true
+        stop:
+          nullable: true
+        targets:
+          type: array
+          items: {}
+
+    SnapshotResponse:
+      type: object
+      properties:
+        ticker:
+          type: string
+        market_context:
+          $ref: "#/components/schemas/MarketContext"
+        timeframes:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/TimeframeStatus"
+        missing_timeframes:
+          type: array
+          items:
+            type: string
+        indicators:
+          type: object
+
+    ScoreResponse:
+      type: object
+      properties:
+        ticker:
+          type: string
+        signal:
+          type: string
+          example: HOLD
+        state:
+          type: string
+          example: NO_MOMO
+        confidence:
+          type: number
+        suggested_size:
+          type: number
+        missing_timeframes:
+          type: array
+          items:
+            type: string
+        timeframes:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/TimeframeStatus"
+        tape:
+          $ref: "#/components/schemas/MarketContext"
+        levels:
+          $ref: "#/components/schemas/ScoreLevels"
+        indicators:
+          type: object
+        audit:
+          type: array
+          items:
+            type: string
