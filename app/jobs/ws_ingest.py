@@ -19,10 +19,16 @@ async def ws_ingest_loop(
     - updates candle builder (which updates the store)
     """
     async for msg in provider.stream_ticks(symbols):
-        tick = Tick(
-            symbol=msg["symbol"],
-            price=msg["price"],
-            size=msg["size"],
-            ts=datetime.fromtimestamp(msg["t_ms"] / 1000.0, tz=timezone.utc),
-        )
+        try:
+            tick = Tick(
+                symbol=msg["symbol"],
+                price=msg["price"],
+                size=msg["size"],
+                ts=datetime.fromtimestamp(msg["t_ms"] / 1000.0, tz=timezone.utc),
+            )
+        except Exception:
+            # Skip malformed tick messages
+            continue
+
         candle_builder.on_tick(tick)
+

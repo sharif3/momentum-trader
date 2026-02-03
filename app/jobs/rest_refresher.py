@@ -67,6 +67,15 @@ def _aggregate_1h_to_4h(symbol: str, c1h: list[Candle], limit_4h: int) -> list[C
 
     return c4h[-limit_4h:]
 
+def _drop_partial(candles: list[Candle], now_utc) -> list[Candle]:
+    if not candles:
+        return candles
+    last = candles[-1]
+    # If candle end is in the future, it is still forming -> drop it.
+    if last.end_ts > now_utc:
+        return candles[:-1]
+    return candles
+
 
 async def rest_refresh_loop(symbol: str) -> None:
     """
@@ -115,6 +124,13 @@ async def rest_refresh_loop(symbol: str) -> None:
                 c4h = [to_candle("4h", r, timedelta(hours=4)) for r in candles_4h]
             except httpx.HTTPStatusError:
                 c4h = _aggregate_1h_to_4h(symbol, c1h, 300)
+
+            now_utc = datetime.now(timezone.utc)
+            c15m = _drop_partial(c15m, now_utc)
+            c1h = _drop_partial(c1h, now_utc)
+            c4h = _drop_partial(c4h, now_utc)
+            c1d = _drop_partial(c1d, now_utc)
+
 
             log.info("Fetched counts symbol=%s 4h=%d", symbol, len(c4h))
 

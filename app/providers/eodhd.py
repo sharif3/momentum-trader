@@ -44,6 +44,9 @@ class EodhdProvider:
         timeout_s = float(os.getenv("EODHD_TIMEOUT_SECONDS", "20"))
         self._client = httpx.Client(timeout=timeout_s)
 
+    def close(self) -> None:
+        self._client.close()
+    
     def _build_ws_url(self) -> str:
         raw = (os.getenv("EODHD_WS_URL") or "wss://ws.eodhistoricaldata.com/ws/us").strip()
         if "api_token=" in raw:

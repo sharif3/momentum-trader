@@ -41,6 +41,11 @@ async def _startup():
         )
     )
 
+@app.on_event("shutdown")
+async def _shutdown():
+    close = getattr(provider, "close", None)
+    if callable(close):
+        close()
 
 @app.get("/health")
 def health():
