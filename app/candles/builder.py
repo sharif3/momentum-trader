@@ -73,6 +73,10 @@ class CandleBuilder:
             )
             self.store.set_current(candle)
             return None
+            
+        # Drop out-of-order ticks (older than current candle start)
+        if current is not None and tick.ts < current.start_ts:
+            return None
 
         # Still inside current 1m window -> update.
         if tick.ts < current.end_ts:

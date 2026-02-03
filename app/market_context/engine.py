@@ -14,16 +14,27 @@ from app.state import store
 _RET_CACHE: dict[tuple[str, int], tuple[float, float]] = {}
 _RET_CACHE_TTL_SECONDS = 60
 
+def _pct_return_from_store_5m(symbol: str, n: int = 6) -> float | None:
+    candles_5m = store.get_history(symbol, "5m") or []
+    if len(candles_5m) < (n + 1):
+        return None
+
+    close_now = float(candles_5m[-1].c)
+    close_then = float(candles_5m[-(n + 1)].c)
+    if close_then == 0:
+        return None
+
+    return float((close_now / close_then) - 1.0)
+
 
 def _pct_return_last_n_5m(symbol: str, n: int = 6) -> float | None:
+    # 0) Use WS-built 5m if available
+    store_ret = _pct_return_from_store_5m(symbol, n=n)
+    if store_ret is not None:
+        return store_ret
+
     # 1) Cache check
-    key = (symbol, n)
-    now = time.time()
-    cached = _RET_CACHE.get(key)
-    if cached:
-        cached_at, cached_val = cached
-        if (now - cached_at) <= _RET_CACHE_TTL_SECONDS:
-            return cached_val
+
 
     # 2) REST fetch (fallback until WS 5m exists)
     provider = get_provider()

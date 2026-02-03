@@ -163,6 +163,8 @@ def score(
         vwap_5m=vwap_5m,
         atr_15m=atr_15m,
         prior_levels_15m=prior_15m,
+        relvol_5m=relvol_5m,
+        relvol_15m=relvol_15m,
         
     )
 
@@ -190,6 +192,8 @@ def score(
             "obv": {"5m": obv_5m, "15m": obv_15m},
             "vwap": {"5m": vwap_5m, "15m": vwap_15m},
             "relvol": {"5m": relvol_5m, "15m": relvol_15m},
+            "relvol_5m": relvol_5m,
+            "relvol_15m": relvol_15m,
         },
         "audit": scoring["audit"],
     }

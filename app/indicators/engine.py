@@ -4,6 +4,18 @@ from typing import Dict, List
 
 from app.candles.store import CandleStore
 
+def _has_gaps(candles: list, expected_seconds: int, max_check: int = 50) -> bool:
+    if len(candles) < 3:
+        return False
+
+    tail = candles[-max_check:]
+    for prev, curr in zip(tail, tail[1:]):
+        delta = (curr.start_ts - prev.start_ts).total_seconds()
+        if delta <= 0:
+            return True
+        if delta > expected_seconds * 1.5 and delta < 7200:
+            return True
+    return False
 
 # -------------------------
 # EMA
@@ -25,6 +37,8 @@ def compute_ema_for_timeframe(
     periods: List[int],
 ) -> Dict[str, float]:
     candles = store.get_history(symbol, timeframe)
+    if timeframe in ("5m", "15m") and _has_gaps(candles, 300 if timeframe == "5m" else 900):
+        return {}
     closes = [c.c for c in candles]
 
     result: Dict[str, float] = {}
@@ -57,6 +71,8 @@ def compute_atr_for_timeframe(
     period: int = 14,
 ) -> Dict[str, float]:
     candles = store.get_history(symbol, timeframe)
+    if timeframe in ("5m", "15m") and _has_gaps(candles, 300 if timeframe == "5m" else 900):
+        return {}
     highs = [c.h for c in candles]
     lows = [c.l for c in candles]
     closes = [c.c for c in candles]
@@ -78,6 +94,8 @@ def compute_prior_high_low(
     window: int = 20,
 ) -> Dict[str, float]:
     candles = store.get_history(symbol, timeframe)
+    if timeframe in ("5m", "15m") and _has_gaps(candles, 300 if timeframe == "5m" else 900):
+        return {}
     if len(candles) < window + 1:
         return {}
     lookback = candles[-(window + 1) : -1]
@@ -127,6 +145,8 @@ def compute_obv_slope_for_timeframe(
     window: int = 20,
 ) -> Dict[str, float]:
     candles = store.get_history(symbol, timeframe)
+    if timeframe in ("5m", "15m") and _has_gaps(candles, 300 if timeframe == "5m" else 900):
+        return {}
     closes = [c.c for c in candles]
     vols = [c.v for c in candles]
 
@@ -151,6 +171,8 @@ def compute_vwap_for_timeframe(
     window: int = 50,
 ) -> Dict[str, float]:
     candles = store.get_history(symbol, timeframe)
+    if timeframe in ("5m", "15m") and _has_gaps(candles, 300 if timeframe == "5m" else 900):
+        return {}
     if len(candles) < 2:
         return {}
 
@@ -186,6 +208,8 @@ def compute_relvol_for_timeframe(
     Uses CLOSED candles.
     """
     candles = store.get_history(symbol, timeframe)
+    if timeframe in ("5m", "15m") and _has_gaps(candles, 300 if timeframe == "5m" else 900):
+        return {}
     if len(candles) < window:
         return {}
 
