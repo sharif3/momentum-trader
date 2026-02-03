@@ -123,6 +123,12 @@ components:
         targets:
           type: array
           items: {}
+        support_range:
+          nullable: true
+        resistance_1:
+          nullable: true
+        resistance_2:
+          nullable: true
 
     SnapshotResponse:
       type: object
@@ -147,6 +153,18 @@ components:
       properties:
         ticker:
           type: string
+        last_price:
+          type: number
+          nullable: true
+          example: 690.50
+        last_price_ts:
+          type: string
+          nullable: true
+          example: "2026-02-02T18:38:58.134442+00:00"
+        last_price_source:
+          type: string
+          nullable: true
+          example: "ws_1m"
         signal:
           type: string
           example: HOLD

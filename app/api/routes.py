@@ -129,6 +129,8 @@ def score(
 
     timeframes = {tf: _tf_status(symbol, tf) for tf in TF_MAX_AGE_SECONDS.keys()}
     missing = [tf for tf, info in timeframes.items() if not info["has_data"]]
+    stale = [tf for tf, info in timeframes.items() if not info["fresh"]]
+
 
     ema_5m = compute_ema_for_timeframe(store, symbol, "5m", periods=[9, 20])
     ema_15m = compute_ema_for_timeframe(store, symbol, "15m", periods=[9, 20, 50, 200])
@@ -137,6 +139,8 @@ def score(
 
     atr_5m = compute_atr_for_timeframe(store, symbol, "5m", period=14)
     atr_15m = compute_atr_for_timeframe(store, symbol, "15m", period=14)
+
+    prior_15m = compute_prior_high_low(store, symbol, "15m", window=20)
 
     obv_5m = compute_obv_slope_for_timeframe(store, symbol, "5m", window=20)
     obv_15m = compute_obv_slope_for_timeframe(store, symbol, "15m", window=20)
@@ -152,14 +156,21 @@ def score(
         store=store,
         market_context=market_context,
         missing_timeframes=missing,
+        stale_timeframes=stale,
         ema_5m=ema_5m,
         ema_15m=ema_15m,
         atr_5m=atr_5m,
         vwap_5m=vwap_5m,
+        atr_15m=atr_15m,
+        prior_levels_15m=prior_15m,
+        
     )
 
     return {
         "ticker": symbol,
+        "last_price": scoring["last_price"],
+        "last_price_ts": scoring["last_price_ts"],
+        "last_price_source": scoring["last_price_source"],
         "signal": scoring["signal"],
         "state": scoring["state"],
         "confidence": scoring["confidence"],

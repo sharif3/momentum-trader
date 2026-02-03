@@ -46,6 +46,9 @@
 - GET /score?ticker=
 - GET /snapshot?ticker=
 - Include freshness + missing TFs + audit in response
+- EXT thin-volume gate added (relvol20)
+- Pending live test: verify gap_check during market hours (5m/15m data present)
+
 
 ## Milestone 9: WebSocket ticks (real-time intraday) ✅
 - Implement real provider WS stream_ticks (connect/auth/subscribe)
