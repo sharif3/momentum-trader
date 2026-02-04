@@ -34,10 +34,17 @@ def _pct_return_last_n_5m(symbol: str, n: int = 6) -> float | None:
         return store_ret
 
     # 1) Cache check
-
+    key = (symbol, n)
+    now = time.time()
+    cached = _RET_CACHE.get(key)
+    if cached:
+        cached_at, cached_val = cached
+        if (now - cached_at) <= _RET_CACHE_TTL_SECONDS:
+            return cached_val
 
     # 2) REST fetch (fallback until WS 5m exists)
     provider = get_provider()
+
 
     # Need n+1 closes to compute return over n bars
     rows = provider.fetch_candles(symbol, "5m", limit=max(50, n + 10))
